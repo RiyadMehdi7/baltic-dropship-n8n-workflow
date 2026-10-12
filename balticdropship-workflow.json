@@ -1,0 +1,449 @@
+{
+  "name": "Product specs - internal Luna high web research + Sol audit (no Exa)",
+  "nodes": [
+    {
+      "id": "1ed49d34-6eae-4887-9fdd-063061331df9",
+      "name": "Upload template",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.4,
+      "position": [
+        0,
+        -384
+      ],
+      "parameters": {
+        "formTitle": "Product specification agent",
+        "formDescription": "Upload a D365 .xlsx workbook with product names and codes. Luna researches it; Sol audits the evidence.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Template",
+              "fieldName": "template",
+              "fieldType": "file",
+              "multipleFiles": false,
+              "acceptFileTypes": ".xlsx",
+              "requiredField": true
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "db7fdbb7-7fa3-4d2f-b5c3-8e4eb342c538"
+    },
+    {
+      "id": "df2d621c-bad7-4db0-a881-8ed1c1de8ed5",
+      "name": "Preserve uploaded workbook",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        -384
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item=$input.first();\nconst key=Object.keys(item.binary||{})[0];\nif(!key) throw new Error('Upload a D365 .xlsx workbook');\nconst meta=item.binary[key];\nconst buffer=await this.helpers.getBinaryDataBuffer(0,key);\nif(buffer.length>25*1024*1024) throw new Error('Workbook exceeds 25 MB');\nif(!buffer.subarray(0,4).equals(Buffer.from([0x50,0x4b,0x03,0x04]))) throw new Error('Upload must be a valid .xlsx workbook');\nconst binary=await this.helpers.prepareBinaryData(buffer,'workbook.zip','application/zip');\nreturn [{json:{filename:meta.fileName||'template.xlsx',uploadBinaryKey:key},binary:{original:binary}}];\n"
+      }
+    },
+    {
+      "id": "117112bd-e613-4a35-b1c6-84cbcb74b09d",
+      "name": "Extract workbook parts",
+      "type": "n8n-nodes-base.compression",
+      "typeVersion": 1.1,
+      "position": [
+        448,
+        -384
+      ],
+      "parameters": {
+        "operation": "decompress",
+        "binaryPropertyName": "original",
+        "outputPrefix": "part_"
+      }
+    },
+    {
+      "id": "510f3813-81f2-41c8-987d-0a1916d53b18",
+      "name": "Inspect D365 template",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        -384
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const RULES={\n  \"Battery_type\": \"Battery chemistry (translate lithium ion to Li-Ion choice, lithium polymer to Li-Po choice). Do not infer chemistry merely from rechargeable.\",\n  \"Built-in_battery\": \"Installed rechargeable battery counts as built-in. True for all phones, tablets, smartwatches, laptops, and wireless earbuds.\",\n  \"Battery_size_mAH\": \"Rated capacity for the supplied model in mAh. For earbuds use the capacity of one earbud, not the charging case. If omitted from consumer marketing pages, use regulatory filings (FCC ID, CE, regulatory labels) or verified hardware teardowns (iFixit, 52audio, GSMArena).\",\n  \"Battery_size_Wh\": \"Battery energy in Wh for laptops/tablets. Distinguish from charger wattage.\",\n  \"Battery_life\": \"Advertised runtime in hours. Phones, tablets and laptops: video playback time (never music/audio playback). Smartwatches: typical/normal-use runtime, not power-saving mode. Earbuds: combined earbuds plus charging-case playback when specified; otherwise single-charge playback. Never use standby time.\",\n  \"Stand-by_time\": \"Explicit standby duration in hours; if manufacturer does not publish standby time, do not estimate.\",\n  \"Charging_time\": \"Time to a full charge in hours. For earbuds use the earbuds' charging time, not the charging case. If only fast-charge playback is claimed (e.g. 5 min = 1.5h) and full 0-100% time is unstated in specs or manual, leave empty.\",\n  \"Fast_charging\": \"Manufacturer explicitly advertises fast/quick/rapid charging or short charge providing stated runtime; do not infer just from USB-C.\",\n  \"Wireless_charging\": \"Whether device supports contactless inductive charging (Qi, MagSafe, etc.). Earbud cases count if case charges wirelessly. Bluetooth is not wireless charging.\",\n  \"Power_W\": \"Rated input/charging power in Watts as one number with unit (e.g. 5W). If a range is published, use the maximum. Omit if unspecified.\",\n  \"Power_supply\": \"AC adapter wattage in Watts (e.g. 65, 100, 140, 230) for laptops.\",\n  \"Input_voltage\": \"Directly stated input voltage (e.g. 5V). May be extracted from user manual, regulatory case label specs, or charging spec.\",\n  \"IP_rating\": \"Exact-model IP rating evidence. Do not transfer rating from related generation or case.\",\n  \"Waterproof\": \"Immersion/swimming protection under documented limits. IPX4/IPX5 is NOT waterproof: answer false/Ne. For smartwatches, 5ATM (50m) or higher pool-swimming supports true/Taip.\",\n  \"Shockproof\": \"Explicit certified/tested impact or shock resistance (e.g. MIL-STD-810H). Consumer electronics without certified rugged/drop testing are false/Ne.\",\n  \"Materials\": \"Match closest allowed enum based on disclosed body/casing, frame, earhook, cushion, or tip materials (e.g. silicone tips + metal hooks + plastic casing -> 'Plastikas, silikonas, metalas'). Do not require a full metallurgical assay.\",\n  \"Contents\": \"Complete in-box list for supplied product/model. Exclude sold-separately accessories. Write it in Lithuanian, comma-separated (e.g. 'Telefonas, USB-C kabelis, SIM išėmimo įrankis').\",\n  \"Length_mm\": \"Overall width in mm. For TVs, must be WITH the stand.\",\n  \"Depth_mm\": \"Overall depth in mm. For TVs, must be WITH the stand.\",\n  \"Height_mm\": \"Overall height in mm. For TVs, must be WITH the stand.\",\n  \"Stereo_speakers\": \"Require built-in two-channel speakers. For in-ear headphones and earbuds, device speakers do not exist, so answer false/Ne. Modern phones, tablets, laptops, and TVs are true/Taip.\",\n  \"Audio_system\": \"Match allowed audio brand/standard only when explicit (Dolby Atmos, Harman Kardon, AKG, etc.). Supported decoding codecs (Dolby Digital/AC3, E-AC3, AC4, DTS decoding) are not an audio system. If no third-party audio branding exists, select 'Nėra'.\",\n  \"Audio_system_frequency_Range\": \"Transducer frequency range in Hz (e.g. 20-20000 Hz) from specs or independent lab testing (RTINGS/SoundGuys).\",\n  \"Noise_canceling\": \"Active Noise Cancelling (ANC) hardware. If product only has passive noise isolation, answer false/Ne.\",\n  \"Built-in_microphone\": \"Require explicit onboard microphone hardware.\",\n  \"Audio_jack\": \"Physical 3.5 mm analog audio port. Modern flagships and ultrabooks without 3.5mm are false/Ne.\",\n  \"Radio\": \"Built-in FM radio hardware tuner. Modern smartphones without 3.5mm jacks and iPhones are false/Ne.\",\n  \"Connection_type\": \"Physical charging connector (USB-C, Lightning, etc.).\",\n  \"Bluetooth\": \"Confirm Bluetooth support.\",\n  \"Bluetooth_version\": \"Require model evidence, Bluetooth SIG certification listing, regulatory filings, or verified lab measurements (SoundGuys, RTINGS).\",\n  \"WiFi\": \"Confirm Wi-Fi support.\",\n  \"WiFi_protocol\": \"Published Wi-Fi protocol generation (Wi-Fi 6, Wi-Fi 6E, Wi-Fi 7, etc.).\",\n  \"3G\": \"Verifies 3G support. Modern smartwatches without 3G and Wi-Fi-only tablets/laptops are false/Ne.\",\n  \"4G\": \"Verifies LTE/4G support. Wi-Fi-only tablets and laptops are false/Ne.\",\n  \"5G\": \"Verifies 5G support. Wi-Fi-only tablets and laptops are false/Ne.\",\n  \"5G_Tele2_Support\": \"Requires support for Tele2 Lithuania 5G bands (n78 3.5GHz, n28 700MHz). Standard EU 5G devices support both (answer Taip).\",\n  \"NFC\": \"Confirm NFC hardware. Standard on modern smartphones; false/Ne on most tablets and laptops.\",\n  \"Contactless_payments\": \"Supported payment platform (Apple Pay, Google Pay, Samsung Pay, Garmin Pay, or Nėra).\",\n  \"Barcode_sensor\": \"Software camera scan is not dedicated barcode optical hardware; answer false/Ne on mobile devices.\",\n  \"Air_humidity_sensor\": \"Modern phones, tablets, and smartwatches lack ambient relative humidity sensors; answer false/Ne.\",\n  \"Discrete_video_card\": \"If laptop or PC has integrated GPU only, answer 'Nėra'.\",\n  \"Front_camera\": \"Front webcam / selfie camera resolution. For laptops, webcam maps here or to Main_camera.\",\n  \"Main_camera\": \"Primary camera resolution. For laptops with a single webcam, map webcam resolution here.\",\n  \"Camera_flash\": \"Physical LED/xenon flash on the rear camera. A screen-based front flash (Retina Flash, display flash) does not count.\",\n  \"HDMI\": \"Count of physical HDMI ports.\",\n  \"HDMI_version\": \"Explicit HDMI capability (e.g. 2.0, 2.1).\",\n  \"USB_2_0\": \"Count or support for USB 2.0.\",\n  \"USB_3_0\": \"Count or support for USB 3.0.\",\n  \"USB_3_1\": \"Count or support for USB 3.1.\",\n  \"USB_3_2\": \"Count or support for USB 3.2.\",\n  \"USB_Type_C\": \"USB Type-C port presence or count.\",\n  \"USB_4\": \"USB4 support. Modern laptops with USB4/TB4 are true/Taip; TVs are 'Nėra' or 0.\",\n  \"Thunderbolt_3\": \"Thunderbolt 3/4 support on supplied port.\",\n  \"RJ-45_port\": \"Physical RJ-45 Ethernet port.\",\n  \"VGA_port\": \"VGA socket count. Modern Smart TVs and ultrabooks are 0.\",\n  \"Input_ports\": \"Count of physical HDMI + USB + LAN (RJ-45) ports on TVs and monitors. Do not count antenna/RF, satellite, CI/CAM slots or audio outputs.\",\n  \"Display_Port\": \"Physical full-size DisplayPort socket.\",\n  \"MiniDP\": \"Physical Mini DisplayPort socket.\",\n  \"Firewire\": \"Legacy Firewire socket count (0 on modern laptops).\",\n  \"DVI\": \"Legacy DVI socket count (0 on modern laptops).\",\n  \"SCSI\": \"Legacy SCSI socket count (0 on modern laptops).\",\n  \"Lightning_port\": \"Physical Lightning port (false/Ne on modern laptops and USB-C phones).\",\n  \"Optical_drive\": \"Built-in CD/DVD drive (false/Ne on modern laptops).\",\n  \"Keyboard_backlight\": \"Whether laptop keyboard is backlit.\",\n  \"LT_keyboard\": \"Physical Lithuanian keyboard layout.\",\n  \"Num_keyboard\": \"Dedicated numeric keypad on laptop keyboard.\",\n  \"LT_menu\": \"Lithuanian user-interface language. Taip when the device operating system offers Lithuanian (Android incl. One UI/HyperOS/HarmonyOS, Wear OS and Windows do); for iOS, iPadOS, watchOS, macOS or other systems check the vendor's supported-language list.\"\n};\nconst CATEGORIES={\"Belaidės ausinės\":\"Headphones\",\"Išmanūs laikrodžiai\":\"Smartwatches\",\"Televizoriai\":\"TV\",\"Planšetiniai kompiuteriai\":\"Tablets\",\"Nešiojami kompiuteriai\":\"Laptops\",\"Išmanieji telefonai\":\"Phones\"};\nconst item=$input.first();\nconst files=new Map();\nfor(const [key,meta] of Object.entries(item.binary||{})){\n  if(!meta.fileName) continue;\n  const bytes=await this.helpers.getBinaryDataBuffer(0,key);\n  const name=meta.fileName.replace(/\\\\/g,'/');\n  const directory=String(meta.directory||'').replace(/\\\\/g,'/').replace(/\\/+$/,'');\n  const path=(directory&&!name.startsWith(directory+'/')?directory+'/'+name:name).replace(/^\\/+/,'');\n  files.set(path,bytes.toString('utf8'));\n}\nconst get=name=>files.get(name);\nconst unescapeXml=value=>String(value).replace(/&(#x[0-9a-f]+|#\\d+|amp|lt|gt|quot|apos);/gi,(_m,e)=>{\n  if(e[0]==='#')return String.fromCodePoint(e[1].toLowerCase()==='x'?parseInt(e.slice(2),16):parseInt(e.slice(1),10));\n  return ({amp:'&',lt:'<',gt:'>',quot:'\"',apos:\"'\"})[e]||_m;\n});\nconst attr=(tag,name)=>unescapeXml(tag.match(new RegExp('(?:^|\\\\s)'+name+'=\"([^\"]*)\"'))?.[1]||'');\nconst val=(xml,tag)=>{const m=xml.match(new RegExp('<'+tag+'\\\\b[^>]*>([\\\\s\\\\S]*?)</'+tag+'>'));return m?unescapeXml(m[1].replace(/<[^>]+>/g,'')):'';};\nconst workbook=get('xl/workbook.xml'),rels=get('xl/_rels/workbook.xml.rels');\nif(!workbook||!rels)throw new Error('Workbook XML parts missing. Extracted paths: '+[...files.keys()].join(', '));\nconst targets={};for(const m of rels.matchAll(/<Relationship\\b[^>]*>/g))targets[attr(m[0],'Id')]=attr(m[0],'Target');\nconst sheets=[];\nfor(const m of workbook.matchAll(/<sheet\\b[^>]*>/g)){\n  const tag=m[0],target=targets[attr(tag,'r:id')];if(!target)continue;\n  const path=target.startsWith('/')?target.slice(1):'xl/'+target.replace(/^\\.\\//,'');\n  const xml=get(path);if(xml)sheets.push({name:attr(tag,'name'),path,xml});\n}\nconst main=sheets.find(s=>s.name==='Šablonas'),meta=sheets.find(s=>s.name==='Meta'),valid=sheets.find(s=>s.name==='Validacijos');\nif(!main||!meta||!valid)throw new Error('Workbook must contain Šablonas, Meta and Validacijos sheets');\nconst sharedXml=get('xl/sharedStrings.xml');\nconst shared=sharedXml?[...sharedXml.matchAll(/<si\\b[^>]*>([\\s\\S]*?)<\\/si>/g)].map(m=>[...m[1].matchAll(/<t\\b[^>]*>([\\s\\S]*?)<\\/t>/g)].map(t=>unescapeXml(t[1])).join('')):[];\nconst cells=xml=>{\n  const result=new Map();\n  for(const m of xml.matchAll(/<c\\b[^>]*\\/>|<c\\b[^>]*>([\\s\\S]*?)<\\/c>/g)){\n    const tag=m[0].match(/^<c\\b[^>]*>/)?.[0]||m[0],ref=attr(tag,'r'),type=attr(tag,'t');\n    const raw=val(m[0],'v');\n    const text=type==='inlineStr'?[...(m[1]||'').matchAll(/<t\\b[^>]*>([\\s\\S]*?)<\\/t>/g)].map(t=>unescapeXml(t[1])).join(''):type==='s'?(shared[Number(raw)]||''):raw;\n    if(ref)result.set(ref,text);\n  }\n  return result;\n};\nconst row=ref=>Number(ref.match(/\\d+$/)?.[0]||0);\nconst col=ref=>[...(ref.match(/^[A-Z]+/)?.[0]||'')].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0);\nconst letter=n=>{let s='';while(n){s=String.fromCharCode(65+(n-1)%26)+s;n=Math.floor((n-1)/26);}return s;};\nconst sheetCells=cells(main.xml),metaCells=cells(meta.xml),validCells=cells(valid.xml),fields={},columns={};\nfor(const [ref,header] of sheetCells){\n  const column=col(ref);if(row(ref)!==1||column<=2||!header)continue;\n  const metaRef=[...metaCells].find(([r,v])=>col(r)===1&&row(r)>=4&&Number(v)===column)?.[0];if(!metaRef)continue;\n  const r=row(metaRef),getMeta=c=>metaCells.get(letter(c)+r)||'',code=getMeta(3),kind=String(getMeta(5)).toUpperCase();if(!code)continue;\n  const options=[];\n  if(kind==='ENUM'){\n    const heading=[...validCells].find(([vref,v])=>row(vref)===1&&v==='L_'+code);\n    if(heading){const optionColumn=col(heading[0]);for(const [vref,value] of validCells)if(col(vref)===optionColumn&&row(vref)>1&&value&&value!=='-')options.push(value);}\n  }\n  const key=String(code).toLowerCase().replace(/[^\\w]+/g,'_'),attribute=String(code).replace(/^\\d+_\\d+_/,'');\n  const type=kind==='BOOLEAN'?'bool':['INTEGER','DECIMAL'].includes(kind)?'number':kind==='ENUM'?'enum':'string';\n  fields[key]={type,options:options.length?options:null,unit:getMeta(6),code,header,column,\n    desc:String(header).replace(/\\n/g,' / ')+'. Exact model only; '+(RULES[attribute]||'Do not infer missing facts.')};\n  columns[header]=key;\n}\nconst formulaRefs=new Set([...main.xml.matchAll(/<c\\b[^>]*\\/>|<c\\b[^>]*>[\\s\\S]*?<\\/c>/g)].filter(m=>/<f\\b/.test(m[0])).map(m=>attr(m[0].match(/^<c\\b[^>]*>/)[0],'r')));\nconst products=[...sheetCells].filter(([ref,value])=>row(ref)>1&&col(ref)===2&&value).map(([ref,name])=>{\n  const productRow=row(ref),existing={},flags={},formulaFields={};\n  for(const [key,field]of Object.entries(fields)){existing[key]=sheetCells.get(letter(field.column)+productRow)??'';formulaFields[key]=formulaRefs.has(letter(field.column)+productRow);flags[key]=/\\[\\s*(?:verify|review|check)\\s*\\]/i.test(String(existing[key]))||/\\?\\s*$/.test(String(existing[key]));}\n  return {row:productRow,code:sheetCells.get('A'+productRow)||'',name,existing,reviewExisting:flags,formulaFields};\n});\nif(!products.length)throw new Error('No product rows found in columns A/B');\nreturn [{json:{filename:item.json.filename,category:CATEGORIES[metaCells.get('B1')||'']||metaCells.get('B1')||'',fields,columns,products,productSheet:main.name,productSheetPath:main.path},binary:item.binary}];\n"
+      }
+    },
+    {
+      "id": "2c667197-437a-4b69-a7f1-ac76757aae21",
+      "name": "Products",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        -256
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const m=$input.first().json;\nlet instructions=\"Research the supplied product and fill empty fields. For prefilled fields, research only when flagged as unverified; preserve existing values unchanged. Resolve exact product configuration from product code/name, identifiers, model, CPU/GPU, display, RAM/storage, and region. Never transfer values between sibling variants. Apply each supplied D365 field definition, datatype, and unit.\\n\\n\"\n+\"UNIVERSAL RESEARCH ESCALATION PROTOCOL (FOR ANY PRODUCT):\\n\"\n+\"1. Primary: Search official manufacturer technical specifications, user manuals, and EU EPREL product records.\\n\"\n+\"2. Regulatory & Certification Fallback: If engineering specifications (such as battery capacity in mAh, Bluetooth core version, RF bands, or charging input voltage) are omitted from consumer marketing pages, systematically search official certification databases: Bluetooth SIG QDID database (bluetooth.com) for Bluetooth specs; FCC ID / CE regulatory filings (fcc.gov, fccid.io) for battery capacity (mAh) and RF ratings; and EU EPREL (eprel.ec.europa.eu) for displays and energy ratings.\\n\"\n+\"3. Independent Lab Fallback: If still unstated, escalate to approved independent testing labs and hardware teardowns: RTINGS, SoundGuys, iFixit, 52audio, GSMArena, and PhoneDB. State in fallbackReason why higher tiers lacked the specification.\\n\\n\"\n+\"CATEGORY-AGNOSTIC PHYSICAL SEMANTICS:\\n\"\n+\"- In-ear headphones and earbuds: Stereo_speakers must be false/Ne (drivers are not device speakers); Audio_system must be 'Nėra' unless a third-party co-brand/standard is explicitly present; Shockproof must be false/Ne unless drop-certified.\\n\"\n+\"- Mobile devices (Phones, Tablets, Watches): Barcode_sensor and Air_humidity_sensor are always false/Ne. Shockproof is false/Ne unless the manufacturer states military-standard (MIL-STD-810) shock or drop testing, in any wording (e.g. 'tested to US military standards'). Thermometer_sensor is true/Taip only when the manufacturer lists a temperature sensor (including skin-temperature sensing); otherwise false/Ne.\\n\"\n+\"- Wi-Fi-only SKUs (Tablets, Laptops): Cellular fields (3G, 4G, 5G, eSIM, 5G_Tele2_Support) must be false/Ne, SIM_count is 0, SIM_type is 'Nėra', and GPS is false/Ne if the device lacks standalone GNSS hardware.\\n\"\n+\"- Smartwatches: 2G EDGE and GPRS are false/Ne. Bluetooth/GPS-only models without LTE: eSIM is false/Ne. Documented 5ATM or higher pool-swimming supports Waterproof=true/Taip.\\n\"\n+\"- Laptops & TVs: Legacy interfaces (Firewire, DVI, SCSI, Optical drive, VGA, 3D_View) are 0 or false/Ne. If a computer has integrated graphics only, Discrete_video_card must be 'Nėra'. A laptop webcam maps to Main_camera.\\n\"\n+\"- Feature phones (keypad phones with a non-smartphone OS): Fingerprint_sensor, Face_recognition_sensor, Gyroscope, Compass, Barometer and Pedometer are false/Ne unless the manufacturer lists them. A phone whose only camera is the main/rear camera has Front_camera 'Nėra'.\\n\"\n+\"- Complete lists: when the manufacturer publishes a complete list of physical components of one kind (ports/interfaces, wireless radios, cameras) and a component of that kind is not in it, that component is false/Ne or 0; quote the list. Never conclude that a feature or function (fast charging, wireless charging, step counting/pedometer, payments, water resistance) is absent only because a source does not mention it. Step counting by any built-in sensor means Pedometer true/Taip.\\n\"\n+\"- Materials: Map disclosed body/casing, frame, earhook, cushion, and tip materials to the closest allowed multi-material enum (e.g. 'Plastikas, silikonas, metalas').\\n\\n\"\n+\"Put exactly one URL in each url field. Each value must be the bare value only (no explanations, alternatives or parentheses); put explanations in quote or fallbackReason. Output compact JSON only: {\\\"values\\\":{\\\"field_key\\\":{\\\"value\\\":...,\\\"quote\\\":\\\"...\\\",\\\"url\\\":\\\"...\\\",\\\"sourceTier\\\":\\\"1|1b|3\\\",\\\"sourceType\\\":\\\"...\\\",\\\"fallbackReason\\\":\\\"...\\\"}},\\\"coverage\\\":{\\\"field_key\\\":{\\\"status\\\":\\\"not_published|not_applicable|conflicting_evidence|research_incomplete\\\",\\\"reason\\\":\\\"...\\\",\\\"checkedUrls\\\":[\\\"...\\\"]}}}. Keep JSON concise.\";\nconst SOURCE_POLICY={\n Phones:\"Tier 1 official brand specifications and applicable public EPREL records; Tier 1b Wi-Fi Alliance, Bluetooth SIG, and FCC ID regulatory filings (fcc.gov, fccid.io) for certified RF and battery ratings; Tier 2 Google Play supported devices CSV and Wikidata for identity only; Tier 3 fallback sources Wikipedia, GSMArena, and PhoneDB may provide values when no applicable Tier 1/Tier 1b evidence is found and no conflict exists.\",\n Tablets:\"Tier 1 official brand specifications and applicable public EPREL records; Tier 1b Wi-Fi Alliance, Bluetooth SIG, and FCC ID regulatory filings for exact certified fields and battery capacities; Tier 2 Google Play supported devices CSV and Wikidata for identity only; Tier 3 fallback sources Wikipedia, GSMArena, and PhoneDB may provide values when no Tier 1/Tier 1b evidence is found and no conflict exists.\",\n Laptops:\"Tier 1 official brand documentation, Lenovo PSREF for Lenovo configurations, and applicable public EPREL records; Tier 1b Wi-Fi Alliance and Bluetooth SIG for certified fields; Tier 2 Wikidata for identity only; Tier 3 Wikipedia and exact-configuration listings from established retailers (including Amazon, Best Buy, Challenger, Kotsovolos, PC International, Intelec, FinalDrive, and in Europe ELKO, 1a, RD Electronics, Euronics, Pigu/220.lv, Varle, Tele2 shops, Alza, Coolblue, MediaMarkt and Currys) may support fallback values only when the exact marketed configuration is explicit, two independent listings agree, and no Tier 1/Tier 1b evidence conflicts.\",\n TV:\"Tier 1 official brand documentation and applicable public EPREL records; Tier 2 Google Play supported devices CSV and Wikidata for identity only; Tier 3 DisplaySpecifications and RTINGS may provide fallback values for panel refresh rate, contrast ratio, and display specs when no applicable Tier 1 evidence or conflict exists.\",\n Smartwatches:\"Tier 1 official brand documentation and public EPREL records; Tier 1b Bluetooth SIG and FCC ID filings for exact certified RF and battery specs; Tier 2 Google Play supported devices CSV and Wikidata for identity only; Tier 3 Wikipedia and GSMArena may provide fallback values when no applicable Tier 1/Tier 1b evidence or conflict exists.\",\n Headphones:\"Tier 1 brand pages/manuals (including beatsbydre.com, apple.com); Tier 1b Bluetooth SIG, FCC ID regulatory records (fcc.gov, fccid.io) for battery capacity and RF specs; Tier 2 Wikidata for identity only; Tier 3 RTINGS, SoundGuys, iFixit, 52audio, and GSMArena may provide fallback values when Tier 1/Tier 1b omits them and no conflict exists.\",\n Speakers:\"Tier 1 brand pages/manuals; Tier 1b Bluetooth SIG and FCC ID filings for RF and battery ratings; Tier 2 Wikidata for identity only; Tier 3 RTINGS and SoundGuys may provide fallback values when no Tier 1/Tier 1b evidence or conflict exists.\",\n Cameras:\"Tier 1 brand pages/manuals; Tier 2 Wikidata for identity only; Tier 3 DPReview and Wikipedia may provide fallback values when no Tier 1 evidence or conflict exists.\",\n Routers:\"Tier 1 brand pages; Tier 1b Wi-Fi Alliance for explicitly certified Wi-Fi fields; Tier 2 Wikidata for identity only.\",\n \"Other network\":\"Tier 1 brand pages; Tier 1b Wi-Fi Alliance for explicitly certified Wi-Fi fields; Tier 2 Wikidata for identity only.\",\n \"Phone accessories\":\"Tier 1 brand pages; Tier 1b USB-IF for USB-PD certified fields, Qi/WPC for explicitly listed Qi fields, and Apple MFi for MFi certification; Tier 2 Open Products Facts for identity only.\",\n \"General accessories\":\"Tier 1 brand pages; Tier 2 Open Products Facts for identity only.\",\n Other:\"Tier 1 brand pages; Tier 2 Open Products Facts for identity only.\"\n};\nconst categoryPolicy=SOURCE_POLICY[m.category]||(/phone/i.test(m.category)?SOURCE_POLICY.Phones:/tablet/i.test(m.category)?SOURCE_POLICY.Tablets:/laptop|computer/i.test(m.category)?SOURCE_POLICY.Laptops:/tv|television|monitor|display/i.test(m.category)?SOURCE_POLICY.TV:/watch/i.test(m.category)?SOURCE_POLICY.Smartwatches:/headphone|earbud/i.test(m.category)?SOURCE_POLICY.Headphones:/speaker/i.test(m.category)?SOURCE_POLICY.Speakers:/camera/i.test(m.category)?SOURCE_POLICY.Cameras:/router/i.test(m.category)?SOURCE_POLICY.Routers:/network/i.test(m.category)?SOURCE_POLICY['Other network']:/vacuum/i.test(m.category)?SOURCE_POLICY.Other:/smart.home/i.test(m.category)?SOURCE_POLICY['Other network']:/accessor/i.test(m.category)?SOURCE_POLICY['General accessories']:SOURCE_POLICY.Other);\ninstructions+='\\n\\nAPPROVED PUBLIC SOURCE POLICY (no registration, account, or API key): '+categoryPolicy+' Tier 1: official brand documentation and public EPREL product records, with EPREL approved at the same evidence level as brand documentation for the exact-model attributes its matching record explicitly reports. Quote the record, model/registration identifier, field and value. Lenovo PSREF is Tier 1 for exact Lenovo configurations. Tier 1b: Wi-Fi Alliance, Bluetooth SIG, FCC ID regulatory records (fcc.gov, fccid.io for rated battery capacities and technical radio filings), USB-IF, Qi/WPC, and Apple MFi. Tier 2: Wikidata, the public Google Play supported-devices CSV, and Open Products Facts are identity/model/variant resolution only; never fill specification cells from them. Tier 3: Wikipedia, GSMArena, PhoneDB, DisplaySpecifications, RTINGS, SoundGuys, iFixit, 52audio, DPReview, and exact-configuration listings from the established retailers named in the category policy are approved fallback evidence, not merely leads. A Tier 3 source may directly support and fill a field when no applicable Tier 1/Tier 1b source provides that field and no Tier 1/Tier 1b conflict exists. Search applicable Tier 1/Tier 1b sources for that field first; record the source URLs checked and state in fallbackReason why they did not provide usable evidence. Tier 3 may support explicit positive or negative statements only when the source directly states them for the exact model; never infer No from silence. Check exact model/configuration, source context, units, conditions; distinguish independent testing/reporting from user-generated content. For every value return sourceTier (1, 1b, or 3), sourceType, and for Tier 3 fallback values a concise fallbackReason. Keep source URLs and exact identifiers; never merge variants.';\nreturn m.products.map(product=>({json:{...m,product,gatewayRequest:{model:'gpt-6-luna',tools:[{type:'web_search'}],include:['web_search_call.action.sources'],max_tool_calls:48,max_output_tokens:30000,reasoning:{effort:'high'},instructions,input:JSON.stringify({category:m.category,product,fields:m.fields})}}}));\n"
+      }
+    },
+    {
+      "id": "b78a645a-5f4e-4de5-baa9-903550c78972",
+      "name": "Gateway specification research",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        -256
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/responses",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.gatewayRequest) }}",
+        "options": {
+          "timeout": 600000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "id": "4db93002-5183-45bc-a2c1-1bf89fb2dfa6",
+      "name": "Research output passthrough",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        -256
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const p=$('Products').all()[$itemIndex].json;\nconst response=$('Gateway specification research').all()[$itemIndex].json;\nif(response.error)throw new Error('Gateway research failed: '+JSON.stringify(response.error));\nconst outputLimitHit=response.status==='incomplete'&&response.incomplete_details?.reason==='max_output_tokens';\nif(response.status!=='completed'&&!outputLimitHit)throw new Error('Gateway research did not complete: '+response.status+'; reason: '+JSON.stringify(response.incomplete_details||{})+'; output tokens: '+response.usage?.output_tokens);\nconst calls=(response.output||[]).filter(x=>x.type==='web_search_call'&&x.status==='completed');\nif(!calls.length)throw new Error('Gateway returned no completed web-search calls; refusing uncited model knowledge');\nconst canonicalize=raw=>{let s=String(raw||'').trim();if(!s.includes('?'))s=s.replace(/%3F/i,'?');s=s.replace(/%3D/gi,'=').replace(/%26/gi,'&');const m=s.match(/^(https?):\\/\\/([^/?#]+)([^?#]*)(?:\\?([^#]*))?(?:#.*)?$/i);if(!m||m[2].includes('@'))return '';const scheme=m[1].toLowerCase(),host=m[2].toLowerCase().replace(scheme==='https'?/:443$/:/:80$/,'').replace(/^www\\./,'');const path=(m[3]||'/').replace(/(.)\\/+$/,'$1');const params=(m[4]||'').split('&').filter(Boolean).filter(x=>!/^(utm_.*|fbclid|gclid|msclkid|srsltid|bvstate|v|ver)=/i.test(x)).sort();return scheme+'://'+host+path+(params.length?'?'+params.join('&'):'');};\nconst cited=new Set(),providerSources=new Set(),texts=[];\nfor(const c of calls){if(c.action?.type==='open_page')providerSources.add(canonicalize(c.action.url));for(const s of c.action?.sources||[])if(s.url)providerSources.add(canonicalize(s.url));}\nfor(const o of response.output||[])if(o.type==='message')for(const c of o.content||[]){if(c.type==='output_text')texts.push(c.text||'');for(const a of c.annotations||[])if(a.type==='url_citation')cited.add(canonicalize(a.url));}\nconst tierOf=raw=>{const h=String(raw).match(/^https?:\\/\\/([^/?#:]+)/i)?.[1]?.toLowerCase().replace(/^www\\./,'')||'';const on=d=>h===d||h.endsWith('.'+d);\nif(['eprel.ec.europa.eu','lenovo.com','hp.com','dell.com','asus.com','acer.com','msi.com','apple.com','support.apple.com','beatsbydre.com','samsung.com','mi.com','xiaomi.com','motorola.com','huawei.com','honor.com','oppo.com','vivo.com','oneplus.com','realme.com','sony.com','lg.com','microsoft.com','intel.com','amd.com','nvidia.com','qualcomm.com','jbl.com','bose.com','sony.net','support.lenovo.com','psref.lenovo.com'].some(on))return '1';\nif(['wi-fi.org','bluetooth.com','qualification.bluetooth.com','usb.org','wirelesspowerconsortium.com','mfi.apple.com','fcc.gov','fccid.io'].some(on))return '1b';\nif(['wikipedia.org','gsmarena.com','phonedb.net','displayspecifications.com','rtings.com','soundguys.com','ifixit.com','52audio.com','dpreview.com','amazon.com','amazon.co.uk','bestbuy.com','challenger.sg','kotsovolos.gr','pcinternational.co.za','intelec.co.cr','finaldrive.eu','techspecs.io','elko.lv','elko.lt','elko.ee','1a.lv','1a.lt','1a.ee','rde.lv','euronics.lv','euronics.ee','pigu.lt','220.lv','kaup24.ee','varle.lt','tele2.lv','tele2.lt','tele2.ee','alza.cz','alza.sk','alza.de','alza.at','coolblue.nl','coolblue.be','coolblue.de','mediamarkt.de','mediamarkt.nl','mediamarkt.es','currys.co.uk'].some(on))return '3';\nif(['wikidata.org','openproductsfacts.org','play.google.com','storage.googleapis.com'].some(on))return '2';return '';};\nlet parsed={values:{},coverage:{}},foundRecords=false,lastError='',parseMode='complete';\nfor(const candidate of texts.slice().reverse()){\n  const clean=String(candidate).replace(/^```(?:json)?\\s*|\\s*```$/g,'').trim();\n  try{const x=JSON.parse(clean);if(x?.values&&typeof x.values==='object'&&!Array.isArray(x.values)){Object.assign(parsed.values,x.values);Object.assign(parsed.coverage,x.coverage||{});foundRecords=true;continue;}}catch(e){lastError=String(e.message||e);}\n  const readSection=section=>{\n    const marker='\"'+section+'\"',at=clean.indexOf(marker);if(at<0)return {};\n    const open=clean.indexOf('{',at+marker.length);if(open<0)return {};\n    const result={};let i=open+1;\n    while(i<clean.length){\n      while(i<clean.length&&/[\\s,]/.test(clean[i]))i++;\n      if(i>=clean.length||clean[i]==='}')break;\n      if(clean[i]!=='\"')break;\n      const ks=i++;let escape=false,closed=false;\n      for(;i<clean.length;i++){const ch=clean[i];if(escape){escape=false;continue;}if(ch==='\\\\'){escape=true;continue;}if(ch==='\"'){i++;closed=true;break;}}\n      if(!closed)break;\n      let key;try{key=JSON.parse(clean.slice(ks,i));}catch{break;}\n      while(i<clean.length&&/\\s/.test(clean[i]))i++;if(clean[i]!==':')break;i++;\n      while(i<clean.length&&/\\s/.test(clean[i]))i++;\n      const start=i,first=clean[i];\n      if(first==='{'){\n        let depth=0,string=false,esc=false,done=false;\n        for(;i<clean.length;i++){const ch=clean[i];if(string){if(esc)esc=false;else if(ch==='\\\\')esc=true;else if(ch==='\"')string=false;continue;}if(ch==='\"'){string=true;continue;}if(ch==='{')depth++;else if(ch==='}'&&--depth===0){i++;done=true;break;}}\n        if(!done)break;\n      }else if(first==='['){\n        let depth=0,string=false,esc=false,done=false;\n        for(;i<clean.length;i++){const ch=clean[i];if(string){if(esc)esc=false;else if(ch==='\\\\')esc=true;else if(ch==='\"')string=false;continue;}if(ch==='\"'){string=true;continue;}if(ch==='[')depth++;else if(ch===']'&&--depth===0){i++;done=true;break;}}\n        if(!done)break;\n      }else if(first==='\"'){\n        i++;let esc=false,done=false;for(;i<clean.length;i++){const ch=clean[i];if(esc){esc=false;continue;}if(ch==='\\\\'){esc=true;continue;}if(ch==='\"'){i++;done=true;break;}}if(!done)break;\n      }else{while(i<clean.length&&!/[},\\s]/.test(clean[i]))i++;if(i===clean.length)break;}\n      try{result[key]=JSON.parse(clean.slice(start,i));}catch{break;}\n    }\n    return result;\n  };\n  const values=readSection('values'),coverage=readSection('coverage');\n  if(Object.keys(values).length||Object.keys(coverage).length){Object.assign(parsed.values,values);Object.assign(parsed.coverage,coverage);foundRecords=true;parseMode='complete_records_merged';}\n}\nif(!foundRecords)throw new Error('Gateway research returned no complete recoverable field records. Parser: '+lastError+'. Output tokens: '+response.usage?.output_tokens+'. Tail: '+texts.join('\\n').slice(-700));\nconst values={},providerEvidence={},rejectedEvidence=[];\nconst visitedHosts=new Set([...cited,...providerSources].map(u=>String(u).split('/')[2]||'').filter(Boolean));\nfor(const [key,v]of Object.entries(parsed.values||{})){\n const urlParts=String(v?.url||'').split(/\\s*(?:\\||,|;|\\s)\\s*(?=https?:\\/\\/)/).map(canonicalize).filter(Boolean);const url=urlParts.find(u=>cited.has(u)||providerSources.has(u))||urlParts[0]||'',detected=tierOf(url),claimed=String(v?.sourceTier||v?.tier||''),sourceTier=detected||(['1','1b','3'].includes(claimed)?'3':claimed==='2'?'2':'unclassified');\n const sourceType=String(v?.sourceType||v?.source_tier_label||(sourceTier==='1'?'brand/EPREL/PSREF':sourceTier==='1b'?'certification database':sourceTier==='3'?'independent reference':'other source'));\n const structural=[];\n if(!p.fields[key])structural.push('Unknown field');\n if(!url)structural.push('Missing or invalid URL');\n if(typeof v?.quote!=='string'||!v.quote.trim())structural.push('Missing source quote');\n if(v?.value===undefined||v.value===null||String(v.value).trim()==='')structural.push('No usable candidate value');\n if(structural.length){rejectedEvidence.push({key,url:v?.url,quote:v?.quote,value:v?.value,reason:structural.join('; ')});continue;}\n const reviewReasons=[];\n if(String(p.product.existing?.[key]??'').trim())reviewReasons.push('Existing cell must be verified before replacement');\n const hostOf=u=>String(u).split('/')[2]||'';\n if(!cited.has(url)&&!providerSources.has(url))reviewReasons.push(visitedHosts.has(hostOf(url))?'URL differs from the pages the search opened on this site':'Site was never visited by the search tool');\n if(sourceTier==='2')reviewReasons.push('Tier 2 may resolve identity but cannot verify a specification');\n if(!['1','1b','3'].includes(sourceTier))reviewReasons.push('Source tier is not confidently classified');\n const fallbackReason=String(v.fallbackReason||v.reason||'').trim();\n values[key]={value:v.value,quote:v.quote,url,sourceTier,tierFromDomain:!!detected,sourceType,fallbackReason,reviewReasons,isExisting:!!String(p.product.existing?.[key]??'').trim(),existingValue:p.product.existing?.[key]??'',auditRequired:!!String(p.product.existing?.[key]??'').trim()||reviewReasons.length>0||sourceTier==='3'};\n providerEvidence[key]={...values[key],evidenceMode:'provider_reported',citationVerified:cited.has(url)||providerSources.has(url),provenance:cited.has(url)?'url_citation':providerSources.has(url)?'provider_tool_source':'model_reported_url',exactQuoteVerified:false,responseId:response.id};\n}\nconst pageCalls=calls.filter(x=>x.action?.type==='open_page'),pageUrls=pageCalls.map(x=>canonicalize(x.action.url)).filter(Boolean),coverage={};\nfor(const key of Object.keys(p.fields)){\n  const report=(parsed.coverage||{})[key]||{},allowed=['not_published','not_applicable','conflicting_evidence','research_incomplete'];\n  coverage[key]={status:values[key]?'supported':allowed.includes(report.status)?report.status:'research_incomplete',reason:String(report.reason||(parseMode==='complete_records_merged'||outputLimitHit?'No complete field record recovered; response may have been truncated':'No unresolved-field note returned')),checkedUrls:(Array.isArray(report.checkedUrls)?report.checkedUrls:[]).map(canonicalize).filter(u=>u&&(cited.has(u)||providerSources.has(u)))};\n  if(parsed.values?.[key]&&!values[key])coverage[key]={...coverage[key],status:'evidence_rejected',reason:rejectedEvidence.find(x=>x.key===key)?.reason||'Evidence rejected'};\n}\nconst {gatewayRequest,...context}=p;\nreturn {json:{...context,research:{values,coverage},coverageReport:{product:p.product.name,totalEmptyFields:Object.keys(coverage).length,proposedCount:Object.keys(parsed.values||{}).length,evidenceAcceptedCount:Object.keys(values).length,evidenceRejectedCount:rejectedEvidence.length,reviewCandidateCount:Object.values(values).filter(v=>v.reviewReasons.length||v.isExisting||v.sourceTier==='3').length,parseMode,fields:Object.entries(coverage).map(([key,x])=>({key,header:p.fields[key]?.header||key,...x}))},sourceTexts:{},providerEvidence,evidenceMode:'provider_reported',rejectedEvidence,researchStats:{searchCalls:calls.filter(x=>x.action?.type==='search').length,pageOpenCalls:pageCalls.length,distinctPagesOpened:new Set(pageUrls).size,repeatedPageOpenCalls:pageUrls.length-new Set(pageUrls).size}}};\n"
+      }
+    },
+    {
+      "id": "767b1547-0fbb-41ec-ac32-3861b49253e0",
+      "name": "Audit agent",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [
+        1568,
+        -256
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ JSON.stringify({product:$json.product,candidates:Object.entries($json.providerEvidence||{}).filter(([key,e])=>e.auditRequired).map(([key,e])=>({key,field:$json.fields?.[key],evidence:Object.assign({},e,{exactQuoteVerified:undefined,citationVerified:undefined,provenance:undefined,responseId:undefined})}))}) }}",
+        "messages": {
+          "messageValues": [
+            {
+              "type": "SystemMessagePromptTemplate",
+              "message": "Audit only the supplied per-column candidate list and its cited research evidence. The research stage already visited these websites; do not fetch the same sources again. Each input row is one field candidate. Check exact product/configuration, field meaning, quote/value agreement, units, conflicts, variant scope, negative evidence, enum fit and suspicious precision. Prioritize weak, ambiguous, conflicting, variant-sensitive, inferred, Tier 3, or explicitly unverified candidates. For straightforward exact-configuration Tier 1/Tier 1b candidates directly matching the quote, mark verified without generic caveats. Tier 3 sources are approved fallback evidence under the source policy: when a Tier 3 quote directly states the value for the exact model and no Tier 1/Tier 1b evidence conflicts, mark it verified; do not downgrade a candidate only because it is Tier 3. Each field definition contains the company's rules (for example: consumer electronics without certified drop testing are Shockproof=false; IPX4 is not waterproof); a candidate that applies such a rule is verified when no evidence contradicts it, even if the quote does not state the negative directly. Citation records are checked separately by the workflow; judge only whether the quote supports the value for this product. Retain every plausible but uncertain candidate as review; reject only clearly unsupported, wrong-field or empty/null candidates. Negative values: when the quote is the manufacturer's complete list of physical components of one kind (ports/interfaces, wireless radios, cameras) and a component of that kind is absent from it, a false/Ne/0/'Nėra' candidate is verified. Never verify that a feature or function (fast charging, wireless charging, step counting/pedometer, payments, water resistance) is absent only because the source does not mention it; such a negative needs an explicit statement or a company rule. Step counting by any built-in sensor means Pedometer true. Exact unit conversions (e.g. 64 MB = 0.064 GB, days to hours) are verified when the arithmetic is exact. Company category rules (apply them like field rules; a candidate that follows them is verified when no evidence contradicts it): Mobile devices (phones, tablets, watches): Barcode_sensor and Air_humidity_sensor are false; Shockproof is false unless the manufacturer states military-standard (MIL-STD-810) shock or drop testing in any wording, and a negative must not be verified when the evidence mentions military-standard testing; Thermometer_sensor is true when the manufacturer lists a temperature sensor or temperature measurement (including skin temperature), otherwise false. Wi-Fi-only tablets and laptops: cellular fields are false, SIM_count 0, SIM_type 'Nėra'. Smartwatches: EDGE and GPRS are false; models without LTE have eSIM false; documented 5ATM or more supports Waterproof true. Laptops and TVs: legacy interfaces (Firewire, DVI, SCSI, Optical drive, VGA, 3D_View) are 0 or false. Feature phones (keypad phones with a non-smartphone OS): Fingerprint_sensor, Face_recognition_sensor, Gyroscope, Compass, Barometer and Pedometer are false unless the manufacturer lists them; a phone whose only camera is the main camera has Front_camera 'Nėra'. Category specific rules: In-ear earbuds do not have stereo speakers (Stereo_speakers=false) and unbranded earbuds have Audio_system='Nėra'. For laptops, complete exact-SKU graphics listing without a dedicated GPU can support Discrete_video_card='Nėra', and a laptop webcam is Front_camera/Main_camera. Compound multi-material enums (like Materials confirming constituent components, e.g. plastic casing and silicone tips mapping to 'Plastikas, silikonas, metalas') are status: verified with verdict: ok. Map enum synonyms to listed choices when one matches; if a verified value is not among choices, keep it exactly as found and mark it verified when the quote supports it. Output ONLY JSON: {\"values\":{\"field_key\":{\"value\":...,\"quote\":\"unchanged quote\",\"url\":\"unchanged URL\",\"status\":\"verified|review\",\"reason\":\"...\"}},\"rejected\":{\"field_key\":{\"reason\":\"...\"}}}. Do not alter the candidate value, quote or URL.\n"
+            }
+          ]
+        },
+        "batching": {
+          "batchSize": 1
+        }
+      }
+    },
+    {
+      "id": "978a4d4f-6926-4f62-b5b4-e0d76e97bb7f",
+      "name": "Sol",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        1648,
+        -48
+      ],
+      "parameters": {
+        "options": {
+          "temperature": 1,
+          "extraBody": "{\"reasoning_effort\": \"medium\", \"max_completion_tokens\": 8000}"
+        },
+        "model": {
+          "__rl": true,
+          "mode": "id",
+          "value": "gpt-6-luna"
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "id": "676753f5-e014-4e1d-8e9b-85c110dbe5ef",
+      "name": "Keep product and audit",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        -256
+      ],
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const p=$('Research output passthrough').all()[$itemIndex].json;\nconst raw=$json.text||$json.output;let audit;\nif(raw&&typeof raw==='object')audit=raw;\nelse {const text=String(raw||'').replace(/^```(?:json)?\\s*|\\s*```$/g,'').trim();try{audit=JSON.parse(text);}catch{throw new Error('Audit returned invalid JSON: '+(text.slice(0,240)||'empty response'));}}\nif(!audit||!audit.values||typeof audit.values!=='object'||Array.isArray(audit.values))throw new Error('Audit must return a values object');\nconst accepted={},auditRejected={...(audit.rejected||{})};\nfor(const [key,e]of Object.entries(p.providerEvidence||{})){\n  if(e.auditRequired||String(p.product.existing?.[key]??'').trim())continue;\n  accepted[key]={...e,status:'verified',verdict:'ok',reason:'Verified during research: Tier '+e.sourceTier+' source with exact quote and cited URL'};\n}\nfor(const [key,v]of Object.entries(audit.values||{})){\n  const e=p.providerEvidence?.[key];if(!e){auditRejected[key]={reason:'No research evidence for this field'};continue;}\n  if(!e.auditRequired)continue;\n  if(!v||JSON.stringify(v.value)!==JSON.stringify(e.value)||v.quote!==e.quote||v.url!==e.url){auditRejected[key]={reason:v?.reason||'Audit changed candidate without supported replacement evidence'};continue;}\n  const requested=String(v.status||(v.verdict==='ok'?'verified':'review')).toLowerCase();\n  const waivable=r=>r==='URL differs from the pages the search opened on this site'||r==='Source tier is not confidently classified';\n  const onlyUncited=(e.reviewReasons||[]).length>0&&e.reviewReasons.every(waivable);\n  const status=requested==='verified'&&(!e.reviewReasons?.length||onlyUncited)?'verified':'review';\n  accepted[key]={...e,...v,auditConfirmedSource:status==='verified'&&onlyUncited,status,verdict:status==='verified'?'ok':'caveat',reason:String(v.reason||e.reviewReasons?.join('; ')||'Plausible value needs targeted human review')};\n  delete auditRejected[key];\n}\nfor(const [key,e]of Object.entries(p.providerEvidence||{}))if(e.auditRequired&&!accepted[key]&&!auditRejected[key])auditRejected[key]={reason:'Audit omitted candidate'};\nconst report={...(p.coverageReport||{}),verifiedCount:Object.values(accepted).filter(v=>v.status==='verified').length,reviewCount:Object.values(accepted).filter(v=>v.status==='review').length,acceptedCount:Object.keys(accepted).length,auditRejectedCount:Object.keys(auditRejected).length,auditRejected};\nreport.fields=(report.fields||[]).map(row=>{const v=accepted[row.key],r=auditRejected[row.key];return {...row,auditStatus:v?.status||(r?'rejected':'not_audited'),auditReason:v?.reason||r?.reason||row.reason};});\nreturn {json:{...p,audited:accepted,coverageReport:report}};\n"
+      }
+    },
+    {
+      "id": "d2362beb-83c0-48ca-ab1e-b73d41badc85",
+      "name": "Join original workbook",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        2144,
+        -384
+      ],
+      "parameters": {
+        "mode": "append",
+        "numberInputs": 2
+      }
+    },
+    {
+      "id": "4e708448-7b30-4dab-aa53-fbb7c33ffa09",
+      "name": "Collect audited results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2368,
+        -384
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const inspectItems=$('Inspect D365 template').all();\nconst original=inspectItems.find(i=>i.json?.products&&i.binary)||inspectItems[0];\nif(!original?.json?.products)throw new Error('Original template data could not be located in Inspect D365 template node');\nconst audits=$('Keep product and audit').all().filter(i=>i.json?.product&&i.json?.audited);\nif(audits.length!==original.json.products.length)throw new Error('Missing or duplicate audited product results');\nconst rows=new Set(audits.map(i=>i.json.product.row));\nif(rows.size!==audits.length||original.json.products.some(p=>!rows.has(p.row)))throw new Error('Audited product rows do not match the original workbook');\nreturn [{json:{...original.json,productResults:audits.map(i=>({...i.json.product,values:i.json.audited,sourceTexts:i.json.sourceTexts,providerEvidence:i.json.providerEvidence,evidenceMode:i.json.evidenceMode,researchStats:i.json.researchStats,coverageReport:i.json.coverageReport}))},binary:original.binary}];\n"
+      }
+    },
+    {
+      "id": "6fbd3fcd-c53e-4691-a769-af47ac1728b8",
+      "name": "Patch workbook parts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2592,
+        -384
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const item=$input.first(),files=new Map();\nfor(const [key,meta] of Object.entries(item.binary||{}))if(meta.fileName){const data=await this.helpers.getBinaryDataBuffer(0,key);const name=meta.fileName.replace(/\\\\/g,'/'),directory=String(meta.directory||'').replace(/\\\\/g,'/').replace(/\\/+$/,'');const path=(directory&&!name.startsWith(directory+'/')?directory+'/'+name:name).replace(/^\\/+/,'');files.set(path,Buffer.from(data));}\nconst find=name=>files.has(name)?name:[...files.keys()].find(path=>path.endsWith('/'+name));\nconst text=name=>{const p=find(name);return p?files.get(p).toString('utf8'):'';};\nconst unesc=s=>String(s).replace(/&(#x[0-9a-f]+|#\\d+|amp|lt|gt|quot|apos);/gi,(_m,e)=>e[0]==='#'?String.fromCodePoint(e[1].toLowerCase()==='x'?parseInt(e.slice(2),16):parseInt(e.slice(1),10)):({amp:'&',lt:'<',gt:'>',quot:'\"',apos:\"'\"})[e]||_m);\nconst esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&apos;');\nconst attr=(tag,key)=>unesc(tag.match(new RegExp('(?:^|\\\\s)'+key+'=\"([^\"]*)\"'))?.[1]||'');\nconst wb=text('xl/workbook.xml'),rels=text('xl/_rels/workbook.xml.rels');if(!wb||!rels)throw new Error('Original XLSX parts are missing');\nconst relMap={};for(const m of rels.matchAll(/<Relationship\\b[^>]*>/g))relMap[attr(m[0],'Id')]=attr(m[0],'Target');\nconst st=[...wb.matchAll(/<sheet\\b[^>]*>/g)].map(m=>m[0]).find(tag=>attr(tag,'name')===item.json.productSheet);if(!st)throw new Error('Product sheet missing');\nconst target=relMap[attr(st,'r:id')],sheetPath=target.startsWith('/')?target.slice(1):'xl/'+target.replace(/^\\.\\//,'');const sheetArchive=find(sheetPath);let sheet=text(sheetPath);if(!sheetArchive||!sheet)throw new Error('Product sheet XML missing');\nconst letter=n=>{let s='';while(n){s=String.fromCharCode(65+(n-1)%26)+s;n=Math.floor((n-1)/26);}return s;};\nconst cellRx=ref=>new RegExp('<c\\\\b(?=[^>]*\\\\br=\"'+ref+'\")[^>]*?(?:\\\\s*/>|>[\\\\s\\\\S]*?</c>)');\nconst squash=s=>String(s||'').normalize('NFKC').toLowerCase().replace(/[^a-z0-9]/g,'');\nconst cleanValue=v=>typeof v==='string'?v.trim().replace(/[\\s,;:]+$/u,'').trim():v;\nconst parseNumber=(v,unit)=>{\n if(typeof v==='number')return Number.isFinite(v)?v:NaN;\n let s=String(v??'').trim().replace(/[\\s,;:]+$/u,'').trim();const u=String(unit||'').trim();\n if(u&&s.toLowerCase().endsWith(u.toLowerCase()))s=s.slice(0,-u.length).trim();s=s.replace(/\\s+/g,'');if(!s)return NaN;\n if(s.includes(',')&&s.includes('.')){if(s.lastIndexOf(',')>s.lastIndexOf('.'))s=s.replace(/\\./g,'').replace(',','.');else s=s.replace(/,/g,'');}\n else if(s.includes(',')){if(/^\\d{1,3}(,\\d{3})+$/.test(s))s=s.replace(/,/g,'');else if((s.match(/,/g)||[]).length===1)s=s.replace(',','.');else return NaN;}\n return /^[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)$/.test(s)?Number(s):NaN;\n};\nconst containsQuote=(quote,body)=>{const q=squash(quote),t=squash(body);if(q.length<3)return false;if(t.includes(q))return true;const words=String(quote).toLowerCase().split(/[^a-z0-9]+/).filter(w=>w.length>=2),lines=String(body).split(/\\r?\\n/);return words.length>=3&&lines.some((_,i)=>words.filter(w=>squash(lines.slice(i,i+6).join(' ')).includes(squash(w))).length>=Math.ceil(words.length*.85));};\nconst NR='Needs Human Review';\nconst nrCell=ref=>{const old=sheet.match(cellRx(ref))?.[0]||'',style=old.match(/\\bs=\"([^\"]+)\"/)?.[1];return `<c r=\"${ref}\"${style?` s=\"${style}\"`:''} t=\"inlineStr\"><is><t>${NR}</t></is></c>`;};\nconst changes=new Map(),evidence=[],notes=[],placeholders=[];\nconst covOf=(product,key)=>(product.coverageReport?.fields||[]).find(f=>f.key===key)||{};\nconst noDataReason=cov=>{const base=({not_published:'No data published: not published by the manufacturer in the checked sources',not_applicable:'No data published: not applicable to this product',conflicting_evidence:'Sources conflict: no single value can be verified',evidence_rejected:'Not verifiable: candidate failed structural checks',research_incomplete:'Not found: no value found during research'})[cov.status]||'Not found: no value found during research';return (cov.reason&&!/^No /.test(cov.reason)?cov.reason+'. ':'')+base;};\nconst annotate=e=>e.verdict==='ok'?`VERIFIED [Tier ${e.sourceTier||'?'}${e.sourceType?' - '+e.sourceType:''}]: ${e.reason}${e.fallbackReason?'\\nFallback: '+e.fallbackReason:''}\\n${e.quote}\\n${e.url}`:`NEEDS HUMAN REVIEW: ${e.reason}${e.candidate?'\\nCandidate found (not written): '+e.candidate:''}${e.quote?'\\nQuote: '+e.quote:''}${e.url?'\\nSource: '+e.url:''}${e.checked?'\\nChecked: '+e.checked:''}`;\nfor(const product of item.json.productResults||[])for(const [key,spec]of Object.entries(item.json.fields||{})){\n const ref=letter(spec.column)+product.row;if(String(product.existing?.[key]??'').trim()||product.formulaFields?.[key])continue;\n const v=product.values?.[key],pe=product.providerEvidence?.[key],cov=covOf(product,key),cand=v||pe;\n const hold=(why,c)=>{changes.set(ref,nrCell(ref));placeholders.push(ref);notes.push({ref,verdict:'review',reason:why,candidate:c?.value!=null?String(c.value):'',quote:c?.quote||'',url:c?.url||'',checked:(cov.checkedUrls||[]).join(', ')});};\n if(!cand){hold(noDataReason(cov),null);continue;}\n if(!v){hold('Failed audit: '+(cov.auditReason||'audit did not accept this candidate'),pe);continue;}\n if(v.verdict!=='ok'){hold('Failed audit: '+(v.reason||cov.auditReason||'audit did not confirm it'),v);continue;}\n if(!v.url||!/^https?:\\/\\//i.test(v.url)||!v.quote){hold('Not verifiable: no source citation with a quote',v);continue;}\n const fetched=String(product.sourceTexts?.[v.url]||'');\n const providerSupported=product.evidenceMode==='provider_reported'&&(pe?.citationVerified===true||(v.auditConfirmedSource===true&&['1','1b','3'].includes(pe?.sourceTier)))&&pe.url===v.url&&pe.quote===v.quote&&JSON.stringify(pe.value)===JSON.stringify(v.value);\n if(!providerSupported&&!containsQuote(v.quote,fetched)){hold('Not verifiable: quote could not be found in the cited source',v);continue;}\n let value=cleanValue(v.value);\n if(spec.type==='bool'){const b=String(value).trim().toLowerCase();if(value===true||['true','yes','taip','1'].includes(b))value='Taip';else if(value===false||['false','no','ne','0'].includes(b))value='Ne';else{hold('Not verifiable: value is not a clear yes/no',v);continue;}}\n if(spec.type==='number'){value=parseNumber(value,spec.unit);if(!Number.isFinite(value)||value<0||(value===0&&!/ports|count|qty|usb|hdmi|firewire|dvi|scsi|vga|mini.?dp/i.test(key))){hold('Not verifiable: number could not be parsed or is not valid for this field',v);continue;}const dayMatch=String(v.quote).match(/(\\d+(?:[.,]\\d+)?)\\s*(?:-\\s*)?days?\\b/i);if(dayMatch&&/^(h|hour|hours)$/i.test(String(spec.unit).trim())&&value===Number(dayMatch[1].replace(',','.')))value*=24;}\n if(spec.type==='enum'&&(typeof value==='boolean'||/^(true|false)$/i.test(String(value))))value=String(value).toLowerCase()==='true'?'Taip':'Ne';\n if(spec.type==='enum'&&Array.isArray(spec.options)&&!spec.options.includes(value)){hold('Not verifiable: value is outside the allowed enum',v);continue;}\n if(value==null||String(value).trim()===''){hold('Not found: empty value',v);continue;}\n const old=sheet.match(cellRx(ref))?.[0]||'',style=old.match(/\\bs=\"([^\"]+)\"/)?.[1],numeric=typeof value==='number';\n changes.set(ref,`<c r=\"${ref}\"${style?` s=\"${style}\"`:''}${numeric?' t=\"n\"':' t=\"inlineStr\"'}>${numeric?`<v>${value}</v>`:`<is><t xml:space=\"preserve\">${esc(value)}</t></is>`}</c>`);\n evidence.push({ref,verdict:'ok',reason:v.reason||'Verified against the cited source',quote:v.quote,url:v.url,sourceTier:v.sourceTier||'',sourceType:v.sourceType||'',fallbackReason:v.fallbackReason||''});\n}\nconst groups=new Map();for(const [ref,cell]of changes){const r=Number(ref.match(/\\d+$/)[0]);if(!groups.has(r))groups.set(r,[]);groups.get(r).push([ref,cell]);}\nfor(const [r,items]of groups){const rx=new RegExp('<row\\\\b(?=[^>]*\\\\br=\"'+r+'\")[^>]*>[\\\\s\\\\S]*?</row>'),match=sheet.match(rx);if(!match)throw new Error('Original template row '+r+' missing');let rowXml=match[0];for(const [ref,cell]of items){const cr=cellRx(ref),old=rowXml.match(cr);rowXml=old?rowXml.replace(cr,cell):rowXml.replace('</row>',cell+'</row>');}sheet=sheet.replace(match[0],rowXml);}\nfiles.set(sheetArchive,Buffer.from(sheet));\nif(evidence.length||notes.length){\n  const relName=sheetPath.replace('worksheets/','worksheets/_rels/')+'.rels';\n  let relPath=find(relName),sheetRels=relPath?text(relName):'<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"></Relationships>';\n  const resolve=target=>{const parts=(target.startsWith('/')?target.slice(1):sheetPath.slice(0,sheetPath.lastIndexOf('/')+1)+target).split('/'),out=[];for(const part of parts){if(part==='..')out.pop();else if(part&&part!=='.')out.push(part);}return out.join('/');};\n  const relationships=[...sheetRels.matchAll(/<Relationship\\b[^>]*\\/>/g)].map(m=>m[0]);\n  const commentRel=relationships.find(t=>attr(t,'Type').endsWith('/comments'));\n  const vmlRel=relationships.find(t=>attr(t,'Type').endsWith('/vmlDrawing'));\n  const suffix=sheetPath.split('/').pop().replace(/\\.xml$/,'');\n  const oldCommentPath=commentRel?resolve(attr(commentRel,'Target')):'xl/comments/agent-'+suffix+'.xml';\n  const oldVmlPath=vmlRel?resolve(attr(vmlRel,'Target')):'xl/drawings/agent-'+suffix+'.vml';\n  const oldComments=text(oldCommentPath),oldVml=text(oldVmlPath);\n  const authors=[...oldComments.matchAll(/<author>([\\s\\S]*?)<\\/author>/g)].map(m=>unesc(m[1]));let author=authors.indexOf('Agent evidence');if(author<0){authors.push('Agent evidence');author=authors.length-1;}\n  const updatedRefs=new Set([...evidence,...notes].map(e=>e.ref));const comments=[...oldComments.matchAll(/<comment\\b[^>]*>[\\s\\S]*?<\\/comment>/g)].map(m=>m[0]).filter(c=>!updatedRefs.has(attr(c,'ref')));for(const e of [...evidence,...notes])comments.push(`<comment ref=\"${e.ref}\" authorId=\"${author}\"><text><t xml:space=\"preserve\">${esc(annotate(e))}</t></text></comment>`);\n  files.set(oldCommentPath||'xl/comments/comment1.xml',Buffer.from(`<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><comments xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><authors>${authors.map(a=>`<author>${esc(a)}</author>`).join('')}</authors><commentList>${comments.join('')}</commentList></comments>`));\n  let vml=oldVml?oldVml.replace(/<\\/xml>\\s*$/,''):'<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"1\"/></o:shapelayout><v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\"><v:stroke joinstyle=\"miter\"/><v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype>';\n  // Replace only note shapes for cells whose evidence comments are being updated.\n  vml=vml.replace(/<(?:\\w+:)?shape\\b[^>]*>[\\s\\S]*?<\\/(?:\\w+:)?shape>/g,shape=>{if(!/ObjectType=\"Note\"/.test(shape))return shape;const row=shape.match(/<(?:\\w+:)?Row>(\\d+)<\\/(?:\\w+:)?Row>/)?.[1],column=shape.match(/<(?:\\w+:)?Column>(\\d+)<\\/(?:\\w+:)?Column>/)?.[1];return row!==undefined&&column!==undefined&&updatedRefs.has(letter(Number(column)+1)+(Number(row)+1))?'':shape;});\n  let shape=Math.max(1026,...[...vml.matchAll(/id=\"_x0000_s(\\d+)\"/g)].map(m=>Number(m[1])+1));\n  for(const e of [...evidence,...notes]){const m=e.ref.match(/^([A-Z]+)(\\d+)$/);let c=0;for(const ch of m[1])c=c*26+ch.charCodeAt(0)-64;vml+=`<v:shape xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\" id=\"_x0000_s${shape++}\" type=\"#_x0000_t202\" style=\"position:absolute;visibility:hidden\" fillcolor=\"#ffffe1\" o:insetmode=\"auto\"><v:fill color2=\"#ffffe1\"/><v:shadow color=\"black\" obscured=\"t\"/><v:path o:connecttype=\"rect\"/><v:textbox/><x:ClientData ObjectType=\"Note\"><x:MoveWithCells/><x:SizeWithCells/><x:AutoFill>False</x:AutoFill><x:Row>${Number(m[2])-1}</x:Row><x:Column>${c-1}</x:Column></x:ClientData></v:shape>`;}\n  vml+='</xml>';files.set(oldVmlPath||'xl/drawings/commentsDrawing1.vml',Buffer.from(vml));\n  if(!commentRel)sheetRels=sheetRels.replace('</Relationships>',`<Relationship Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments\" Target=\"/${oldCommentPath}\" Id=\"commentsAgent\"/></Relationships>`);\n  if(!vmlRel)sheetRels=sheetRels.replace('</Relationships>',`<Relationship Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing\" Target=\"/${oldVmlPath}\" Id=\"vmlCommentsAgent\"/></Relationships>`);\n  relPath=relPath||relName;files.set(relPath,Buffer.from(sheetRels));\n  if(!sheet.includes('<legacyDrawing')){const id=attr(sheetRels.match(/<Relationship[^>]*vmlDrawing[^>]*\\/>/)?.[0]||'','Id');files.set(sheetArchive,Buffer.from(sheet.replace('</worksheet>',`<legacyDrawing xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:id=\"${id}\"/></worksheet>`)));}\n  const ctPath=find('[Content_Types].xml');let ct=text('[Content_Types].xml');if(!ct.includes('/'+oldCommentPath))ct=ct.replace('</Types>',`<Override PartName=\"/${oldCommentPath}\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml\"/></Types>`);if(!/Extension=\"vml\"/.test(ct))ct=ct.replace('</Types>','<Default Extension=\"vml\" ContentType=\"application/vnd.openxmlformats-officedocument.vmlDrawing\"/></Types>');files.set(ctPath,Buffer.from(ct));\n}\nif(evidence.length||placeholders.length){\n sheet=files.get(sheetArchive).toString('utf8');const stylesPath=find('xl/styles.xml');if(!stylesPath)throw new Error('Workbook styles part is missing');\n let styles=text('xl/styles.xml');const fillsM=styles.match(/<fills\\b[^>]*>[\\s\\S]*?<\\/fills>/),xfsM=styles.match(/<cellXfs\\b[^>]*>[\\s\\S]*?<\\/cellXfs>/);if(!fillsM||!xfsM)throw new Error('Workbook styles are missing fills or cellXfs');\n const fillCount=(fillsM[0].match(/<fill\\b/g)||[]).length;\n const fillXml=rgb=>`<fill><patternFill patternType=\"solid\"><fgColor rgb=\"${rgb}\"/><bgColor indexed=\"64\"/></patternFill></fill>`;\n const fillOk=fillCount,fillReview=fillCount+1,fillOpen=fillsM[0].match(/<fills\\b[^>]*>/)[0];\n const fillsNew=fillOpen.replace(/count=\"\\d+\"/,`count=\"${fillCount+2}\"`)+fillsM[0].slice(fillOpen.length,-'</fills>'.length)+fillXml('FFC6EFCE')+fillXml('FFFFC7CE')+'</fills>';\n const xfs=[...xfsM[0].matchAll(/<xf\\b[^>]*?(?:\\/>|>[\\s\\S]*?<\\/xf>)/g)].map(m=>m[0]);const xfOpen=xfsM[0].match(/<cellXfs\\b[^>]*>/)[0],added=[],styleIndex=new Map();\n const styledIndex=(s,fillId)=>{const key=s+':'+fillId;if(!styleIndex.has(key)){const base=xfs[Number(s)];if(!base)throw new Error('Cell style '+s+' missing');let xf=/\\bfillId=\"\\d+\"/.test(base)?base.replace(/\\bfillId=\"\\d+\"/,`fillId=\"${fillId}\"`):base.replace(/^<xf\\b/,`<xf fillId=\"${fillId}\"`);xf=xf.replace(/\\sapplyFill=\"\\d+\"/,'').replace(/^<xf\\b/,'<xf applyFill=\"1\"');styleIndex.set(key,xfs.length+added.length);added.push(xf);}return styleIndex.get(key);};\n for(const e of [...evidence.map(e=>({ref:e.ref,fill:fillOk})),...placeholders.map(ref=>({ref,fill:fillReview}))]){const cell=sheet.match(cellRx(e.ref))?.[0];if(!cell)throw new Error('Styled cell missing: '+e.ref);const s=cell.match(/\\bs=\"(\\d+)\"/)?.[1]||'0',idx=styledIndex(s,e.fill);const next=/\\bs=\"\\d+\"/.test(cell)?cell.replace(/\\bs=\"\\d+\"/,`s=\"${idx}\"`):cell.replace(/^<c\\b/,`<c s=\"${idx}\"`);sheet=sheet.replace(cell,()=>next);}\n const xfOpenNew=xfOpen.replace(/count=\"\\d+\"/,`count=\"${xfs.length+added.length}\"`);\n styles=styles.replace(fillsM[0],()=>fillsNew).replace(xfsM[0],()=>xfOpenNew+xfsM[0].slice(xfOpen.length,-'</cellXfs>'.length)+added.join('')+'</cellXfs>');files.set(stylesPath,Buffer.from(styles));files.set(sheetArchive,Buffer.from(sheet));\n}\nconst writtenRefs=new Set(evidence.map(e=>e.ref));\nconst productReport=(item.json.productResults||[]).map(product=>{const keys=Object.keys(item.json.fields||{}).filter(k=>!String(product.existing?.[k]??'').trim()&&!product.formulaFields?.[k]);const isWritten=k=>writtenRefs.has(letter(item.json.fields[k].column)+product.row);return {row:product.row,code:product.code,name:product.name,verified:keys.filter(isWritten).length,needsHumanReview:keys.filter(k=>!isWritten(k)).length};});\nconst output={};let index=0;for(const [name,bytes]of files){const meta=await this.helpers.prepareBinaryData(bytes,name);meta.fileName=name;delete meta.directory;output['part_'+index++]=meta;}\nreturn [{json:{filename:(item.json.filename||'template.xlsx').replace(/\\.xlsx$/i,'_enriched.xlsx'),filledCells:evidence.length,needsHumanReview:placeholders.length,productReport},binary:output}];\n"
+      }
+    },
+    {
+      "id": "87ed8eda-f1cf-43c0-8869-f2219a053e12",
+      "name": "Repack XLSX workbook",
+      "type": "n8n-nodes-base.compression",
+      "typeVersion": 1.1,
+      "position": [
+        2816,
+        -384
+      ],
+      "parameters": {
+        "operation": "compress",
+        "binaryPropertyName": "={{ Object.keys($binary).join(',') }}",
+        "outputFormat": "zip",
+        "fileName": "={{ $json.filename }}",
+        "binaryPropertyOutput": "data"
+      }
+    },
+    {
+      "id": "17ba5afd-5b17-4170-9722-d0face1f9e8b",
+      "name": "Return workbook",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.3,
+      "position": [
+        3040,
+        -384
+      ],
+      "parameters": {
+        "operation": "completion",
+        "respondWith": "returnBinary",
+        "inputDataFieldName": "data",
+        "completionTitle": "Verified template ready",
+        "options": {}
+      },
+      "webhookId": "a9d1f8ad-819d-4865-a538-dbc0531d3749"
+    }
+  ],
+  "connections": {
+    "Upload template": {
+      "main": [
+        [
+          {
+            "node": "Preserve uploaded workbook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preserve uploaded workbook": {
+      "main": [
+        [
+          {
+            "node": "Extract workbook parts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract workbook parts": {
+      "main": [
+        [
+          {
+            "node": "Inspect D365 template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Inspect D365 template": {
+      "main": [
+        [
+          {
+            "node": "Products",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Join original workbook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Products": {
+      "main": [
+        [
+          {
+            "node": "Gateway specification research",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Research output passthrough": {
+      "main": [
+        [
+          {
+            "node": "Audit agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Audit agent": {
+      "main": [
+        [
+          {
+            "node": "Keep product and audit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep product and audit": {
+      "main": [
+        [
+          {
+            "node": "Join original workbook",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Join original workbook": {
+      "main": [
+        [
+          {
+            "node": "Collect audited results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect audited results": {
+      "main": [
+        [
+          {
+            "node": "Patch workbook parts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Patch workbook parts": {
+      "main": [
+        [
+          {
+            "node": "Repack XLSX workbook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Repack XLSX workbook": {
+      "main": [
+        [
+          {
+            "node": "Return workbook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gateway specification research": {
+      "main": [
+        [
+          {
+            "node": "Research output passthrough",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sol": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Audit agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "active": false,
+  "id": "balticDropshipRecovered20261010",
+  "pinData": {},
+  "tags": []
+}
